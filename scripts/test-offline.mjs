@@ -1,0 +1,15 @@
+import {build} from 'esbuild';
+import {mkdirSync,readFileSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
+mkdirSync('.offline-tests',{recursive:true});
+await build({entryPoints:['lib/tasks.ts','lib/calendar.ts','lib/legacy-v1.ts','lib/storage.ts','lib/report-export.ts','lib/word-cloud.ts'],outdir:'.offline-tests',bundle:true,platform:'node',format:'esm',outExtension:{'.js':'.mjs'},logLevel:'silent'});
+const result=spawnSync(process.execPath,['--test','tests/offline-domain.test.mjs'],{stdio:'inherit',env:{...process.env,TZ:'Asia/Shanghai'}});
+if(result.status)process.exit(result.status);
+const html=readFileSync('dist/index.html','utf8');
+if(/<(?:script|iframe)\b[^>]*\bsrc\s*=/i.test(html))throw new Error('External script or iframe found');
+if(/<link\b[^>]*\bhref\s*=\s*["'](?!data:)/i.test(html))throw new Error('Non-embedded link asset found');
+if(/@import\b/i.test(html.match(/<style id="app-style">([\s\S]*?)<\/style>/)?.[1]??''))throw new Error('External stylesheet import found');
+const code=html.match(/<script id="app-script">([\s\S]*?)<\/script>/)?.[1];
+if(!code)throw new Error('Inline application missing');
+new Function(code);
+console.log('PASS: standalone HTML uses embedded JS and CSS; JavaScript parses without modules, server or CDN.');
