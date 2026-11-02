@@ -13,6 +13,8 @@ fn main() {
         }
         let commands = &[
             "read_document",
+            "read_state",
+            "write_state",
             "write_document",
             "ensure_daily_backup",
             "list_snapshots",

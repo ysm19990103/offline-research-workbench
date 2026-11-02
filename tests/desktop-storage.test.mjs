@@ -8,6 +8,8 @@ globalThis.isTauri=true;
 globalThis.window={__TAURI_INTERNALS__:{invoke:async(command,args={})=>{
  calls.push(command);
  if(command==='read_document')return {payload,revision};
+ if(command==='read_state')return {memory:payload?JSON.parse(payload).memory:null,revision};
+ if(command==='write_state'){assert.equal(args.expectedRevision,revision);if(failWrite)throw new Error('simulated disk failure');const old=payload?JSON.parse(payload):{format:'youxu-full-backup',version:2,createdAt:new Date().toISOString(),assets:[]};old.memory=JSON.parse(args.memory);const retained=new Set(old.memory.resources.map(r=>r.blobId));old.assets=old.assets.filter(a=>retained.has(a.id));payload=JSON.stringify(old);revision++;return;}
  if(command==='write_document'){
   assert.equal(args.expectedRevision,revision);
   if(failWrite)throw new Error('simulated disk failure');
@@ -31,7 +33,7 @@ function fixture(){
 test('desktop storage never opens IndexedDB; serial mutations retain both updates',async()=>{
  reset();await s.changeMemory(()=>fixture());
  await Promise.all([s.changeMemory(m=>({...m,tasks:m.tasks.map(x=>({...x,notes:'edited'}))})),s.changeMemory(m=>({...m,moodEntries:m.moodEntries.map(x=>({...x,score:9}))}))]);
- const memory=await s.readMemory();assert.equal(memory.tasks[0].notes,'edited');assert.equal(memory.moodEntries[0].score,9);assert.equal(revision,3);
+ const memory=await s.readMemory();assert.equal(memory.tasks[0].notes,'edited');assert.equal(memory.moodEntries[0].score,9);assert.equal(revision,3);assert.equal(calls.includes('read_document'),false);assert.equal(calls.includes('write_document'),false);
 });
 test('browser JSON migrates losslessly into desktop and exports back with binary attachment',async()=>{
  reset();const memory=fixture(),id=crypto.randomUUID();

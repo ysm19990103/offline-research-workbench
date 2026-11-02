@@ -23,6 +23,29 @@ pub struct Status {
     pub message: Option<String>,
 }
 pub type Ledger = BTreeMap<String, f64>;
+pub fn signature(memory: &Value) -> String {
+    let mut tasks: Vec<Value> = memory["tasks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| {
+            t["sample"] != true
+                && t["completed"] != true
+                && t["project"] != "leisure"
+                && t["dueDate"].is_string()
+        })
+        .map(|t| serde_json::json!([t["id"], t["dueDate"], t["title"]]))
+        .collect();
+    tasks.sort_by_key(Value::to_string);
+    format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::json!([memory["sleepReminder"]["enabled"], tasks])
+                .to_string()
+                .as_bytes()
+        )
+    )
+}
 pub fn deadline_id(task: &Value) -> String {
     format!(
         "workbench.deadline.{:x}",

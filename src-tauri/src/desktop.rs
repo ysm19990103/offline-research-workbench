@@ -1,5 +1,5 @@
 use crate::{
-    core::{self, err, BackupInfo, DiskStatus, Document, Result, Store},
+    core::{self, err, BackupInfo, DiskStatus, Document, MemoryDocument, Result, Store},
     reminders::{self, Status},
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -25,9 +25,9 @@ fn sync(app: &AppHandle, request: bool) -> Result<Status> {
     let state = app.state::<Desktop>();
     let _lock = state.notifications.lock().map_err(|_| "通知锁不可用。")?;
     let (payload, ledger, revision) = with_store(app, |store| {
-        let doc = store.read()?;
+        let doc = store.state()?;
         Ok((
-            doc.payload,
+            doc.memory,
             store.setting("notificationLedger")?,
             doc.revision,
         ))
@@ -39,11 +39,11 @@ fn sync(app: &AppHandle, request: bool) -> Result<Status> {
             message: None,
         });
     };
-    let doc: Value = serde_json::from_str(&payload).map_err(err)?;
+    let memory = payload;
     let ledger = ledger
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    let (items, next) = reminders::plan(&doc["memory"], chrono::Local::now(), &ledger);
+    let (items, next) = reminders::plan(&memory, chrono::Local::now(), &ledger);
     let status = reminders::sync(&items, request)?;
     if status.state == "granted" {
         with_store(app, |store| {
@@ -52,7 +52,7 @@ fn sync(app: &AppHandle, request: bool) -> Result<Status> {
                 Some(&serde_json::to_string(&next).map_err(err)?),
             )?;
             // A save during this call keeps the next reconciliation pending.
-            if store.read()?.revision == revision {
+            if store.state()?.revision == revision {
                 store.set("notificationDirty", None)?;
             }
             Ok(())
@@ -60,11 +60,45 @@ fn sync(app: &AppHandle, request: bool) -> Result<Status> {
     }
     Ok(status)
 }
+fn mark_notification_changes(
+    store: &mut Store,
+    change: impl FnOnce(&mut Store) -> Result<()>,
+) -> Result<bool> {
+    let before = reminders::signature(&store.state()?.memory.unwrap_or(Value::Null));
+    change(store)?;
+    let changed = before != reminders::signature(&store.state()?.memory.unwrap_or(Value::Null));
+    if changed {
+        store.set("notificationDirty", Some("true"))?;
+    }
+    Ok(changed)
+}
 #[tauri::command]
 async fn read_document(app: AppHandle) -> Result<Document> {
     tauri::async_runtime::spawn_blocking(move || with_store(&app, |s| s.read()))
         .await
         .map_err(err)?
+}
+#[tauri::command]
+async fn read_state(app: AppHandle) -> Result<MemoryDocument> {
+    tauri::async_runtime::spawn_blocking(move || with_store(&app, |s| s.state()))
+        .await
+        .map_err(err)?
+}
+#[tauri::command]
+async fn write_state(app: AppHandle, memory: String, expected_revision: i64) -> Result<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let changed = with_store(&app, |s| {
+            mark_notification_changes(s, |s| s.write_state(&memory, expected_revision))
+        })?;
+        if changed {
+            tauri::async_runtime::spawn_blocking(move || {
+                let _ = sync(&app, false);
+            });
+        }
+        Ok(())
+    })
+    .await
+    .map_err(err)?
 }
 #[tauri::command]
 async fn write_document(
@@ -74,14 +108,14 @@ async fn write_document(
     restoring: bool,
 ) -> Result<()> {
     tauri::async_runtime::spawn_blocking(move || {
-        with_store(&app, |s| {
-            s.write(&payload, expected_revision, restoring)?;
-            s.set("notificationDirty", Some("true"))
+        let changed = with_store(&app, |s| {
+            mark_notification_changes(s, |s| s.write(&payload, expected_revision, restoring))
         })?;
-        let handle = app.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            let _ = sync(&handle, false);
-        });
+        if changed {
+            tauri::async_runtime::spawn_blocking(move || {
+                let _ = sync(&app, false);
+            });
+        }
         Ok(())
     })
     .await
@@ -109,7 +143,9 @@ async fn read_snapshot(app: AppHandle, key: String) -> Result<String> {
 async fn backup_status(app: AppHandle) -> Result<DiskStatus> {
     tauri::async_runtime::spawn_blocking(move || {
         with_store(&app, |s| {
-            s.daily(&today())?;
+            if s.needs_daily_backup(&today())? {
+                s.daily(&today())?;
+            }
             s.disk_status()
         })
     })
@@ -132,7 +168,9 @@ async fn choose_backup_directory(app: AppHandle) -> Result<DiskStatus> {
             s.set("backupDirectory", Some(&folder.to_string_lossy()))?;
             s.set("backupDate", None)?;
             s.set("backupError", None)?;
-            s.daily(&today())?;
+            if s.needs_daily_backup(&today())? {
+                s.daily(&today())?;
+            }
             s.disk_status()
         })
     })
@@ -349,7 +387,7 @@ pub fn run() {
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {
                 let _ = with_store(&handle, |s| {
-                    if s.read()?.payload.is_some() {
+                    if s.state()?.memory.is_some() && s.needs_daily_backup(&today())? {
                         s.daily(&today())?;
                     }
                     Ok(())
@@ -361,6 +399,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             read_document,
+            read_state,
+            write_state,
             write_document,
             ensure_daily_backup,
             list_snapshots,

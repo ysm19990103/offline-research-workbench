@@ -168,6 +168,9 @@ fn changed_symlink_and_backup_symlinks_are_rejected() {
 #[test]
 fn reminders_update_cancel_and_deduplicate_after_delivery() {
     let mut value = document()["memory"].clone();
+    let original_signature = signature(&value);
+    value["journals"][0]["reflection"] = json!("diary edit");
+    assert_eq!(signature(&value), original_signature);
     let now = Local.with_ymd_and_hms(2026, 11, 2, 8, 0, 0).unwrap();
     let (jobs, ledger) = plan(&value, now, &Ledger::new());
     assert_eq!(jobs.len(), 2);
@@ -197,4 +200,70 @@ fn late_same_day_task_schedules_once_and_leisure_has_no_deadline() {
     );
     value["tasks"][0]["project"] = json!("leisure");
     assert_eq!(plan(&value, now, &Ledger::new()).0.len(), 1);
+}
+
+#[test]
+fn ordinary_edits_never_transfer_or_rewrite_attachment_bytes() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let temp = tempfile::tempdir().unwrap();
+    let mut store = Store::open(temp.path()).unwrap();
+    let mut value = document();
+    let data = STANDARD.encode(vec![0x42; 1024 * 1024]);
+    value["memory"]["resources"] = json!([{"id":"r","taskId":"synthetic-task","mode":"copy","blobId":"bytes","size":1024*1024}]);
+    value["assets"] = json!([{"id":"bytes","name":"synthetic.bin","mime":"application/octet-stream","size":1024*1024,"data":data}]);
+    store.write(&value.to_string(), 0, false).unwrap();
+    let state = store.state().unwrap();
+    assert!(serde_json::to_string(&state).unwrap().len() < 10000);
+    store.db.execute_batch("CREATE TRIGGER guard_asset_insert BEFORE INSERT ON assets BEGIN SELECT RAISE(ABORT,'unexpected attachment insert'); END; CREATE TRIGGER guard_asset_delete BEFORE DELETE ON assets BEGIN SELECT RAISE(ABORT,'unexpected attachment delete'); END; CREATE TRIGGER guard_asset_update BEFORE UPDATE ON assets BEGIN SELECT RAISE(ABORT,'unexpected attachment update'); END;").unwrap();
+    let mut memory = state.memory.unwrap();
+    memory["journals"][0]["reflection"] = json!("updated without attachment IO");
+    store.write_state(&memory.to_string(), 1).unwrap();
+    let captured: Value = serde_json::from_str(&store.read().unwrap().payload.unwrap()).unwrap();
+    assert_eq!(captured["assets"][0]["data"], data);
+    assert_eq!(captured["memory"]["journals"], memory["journals"]);
+    assert!(store.write_state(&memory.to_string(), 1).is_err());
+}
+
+#[test]
+fn early_desktop_schema_migrates_and_recovery_retains_attachments() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut value = document();
+    value["memory"]["resources"] =
+        json!([{"id":"r","taskId":"synthetic-task","mode":"copy","blobId":"bytes","size":5}]);
+    value["assets"] = json!([{"id":"bytes","name":"synthetic.txt","mime":"text/plain","size":5,"data":"aGVsbG8="}]);
+    {
+        let store = Store::open(temp.path()).unwrap();
+        store
+            .db
+            .execute(
+                "INSERT INTO document(id,revision,payload) VALUES(1,7,?1)",
+                [value.to_string()],
+            )
+            .unwrap();
+    }
+    let mut store = Store::open(temp.path()).unwrap();
+    assert_eq!(store.state().unwrap().revision, 7);
+    assert_eq!(
+        serde_json::from_str::<Value>(&store.read().unwrap().payload.unwrap()).unwrap(),
+        value
+    );
+    let raw: String = store
+        .db
+        .query_row("SELECT payload FROM document WHERE id=1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&raw).unwrap()["assets"],
+        json!([])
+    );
+    store.write(&document().to_string(), 7, true).unwrap();
+    let recovery = store
+        .snapshots()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.kind == "recovery")
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&store.snapshot(&recovery.key).unwrap()).unwrap()["assets"],
+        value["assets"]
+    );
 }

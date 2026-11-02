@@ -1,6 +1,6 @@
 # macOS 桌面版验证记录
 
-验证日期：2026-11-02。已完成的双架构构建见 [Actions 运行 41375587008](https://github.com/ysm19990103/offline-research-workbench/actions/runs/41375587008)。该 PR 构建的应用源码来自 `a96271394bdcefa73de96f49f7c580f4a6aeb83b`，GitHub 测试合并提交为 `c0cdf71319ae5d093afcf16e4c8a5e7081bf362b`；后续更新以对应 Actions 记录中的 SHA 为准。
+验证日期：2026-11-02。已完成的双架构构建见 [Actions 运行 41375587008](https://github.com/ysm19990103/offline-research-workbench/actions/runs/41375587008)。该首次成功 PR 构建的应用源码来自 `a96271394bdcefa73de96f49f7c580f4a6aeb83b`，GitHub 测试合并提交为 `c0cdf71319ae5d093afcf16e4c8a5e7081bf362b`；附件存储优化后的最终源码与构建状态见 [PR #1](https://github.com/ysm19990103/offline-research-workbench/pull/1)，具体 SHA 以对应 Actions 记录为准。
 
 ## 已执行的检查
 
@@ -8,7 +8,7 @@
 | --- | --- |
 | 原有业务规则 | Linux / Node：35 项通过；涵盖四类任务、层级、计时、报告、心情隔离、备份、历法和词云。 |
 | 桌面存储桥 | Linux / Node，模拟原生 IPC：7 项通过；包括完整 JSON / 附件往返、并发保存、写入失败、恢复点请求、取消导出及当天计时锁。 |
-| Rust 原生层 | Linux、macOS Apple Silicon 和 Intel：13 项通过；包括 SQLite 重新打开、修订冲突、损坏附件、恢复写入失败、快照保留、文件授权、符号链接与提醒排程去重。 |
+| Rust 原生层 | Linux、macOS Apple Silicon 和 Intel：15 项通过；包括 SQLite 重新打开、修订冲突、损坏附件、恢复写入失败、快照保留、文件授权、符号链接、提醒排程去重、早期桌面数据库迁移，以及普通编辑不读写附件字节。 |
 | 图形界面 | Linux / Chromium 153，模拟 IPC：新建任务、心情评分与日记、资料目录关联、打开 / Finder 请求、桌面备份面板通过；未发生页面脚本错误。此项没有调用真实 Finder 或系统文件对话框。 |
 | Apple Silicon 包 | macOS 15.8.2 / arm64：真实编译 `.app`、`.dmg`；Mach-O 为 arm64；签名与 DMG 完整性通过。 |
 | Intel 包 | macOS 15.7.9 / x86_64：真实编译 `.app`、`.dmg`；Mach-O 为 x86_64；签名与 DMG 完整性通过。 |

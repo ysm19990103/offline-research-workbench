@@ -22,6 +22,11 @@ pub struct Document {
     pub payload: Option<String>,
 }
 #[derive(Serialize)]
+pub struct MemoryDocument {
+    pub revision: i64,
+    pub memory: Option<Value>,
+}
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupInfo {
     pub key: String,
@@ -39,8 +44,8 @@ pub struct DiskStatus {
     pub message: Option<String>,
 }
 
-// One versioned JSON document preserves the browser schema without translating or
-// dropping journal/report fields. Memory and attachment bytes commit together.
+// Preserve the versioned browser schema; keep attachment bytes in separate rows.
+// Ordinary journal/task saves never transfer or rewrite attachment payloads.
 pub struct Store {
     pub db: Connection,
     pub root: PathBuf,
@@ -49,12 +54,33 @@ impl Store {
     pub fn open(root: &Path) -> Result<Self> {
         fs::create_dir_all(root).map_err(err)?;
         private_dir(root)?;
-        let db = Connection::open(root.join("workbench.sqlite3")).map_err(err)?;
+        let mut db = Connection::open(root.join("workbench.sqlite3")).map_err(err)?;
         db.busy_timeout(Duration::from_secs(10)).map_err(err)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
           CREATE TABLE IF NOT EXISTS document (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, payload TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, size INTEGER NOT NULL, payload TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS grants (id TEXT PRIMARY KEY, path TEXT NOT NULL, directory INTEGER NOT NULL);").map_err(err)?;
+        // Upgrade an early desktop document atomically, preserving every byte.
+        let old: Option<String> = db
+            .query_row("SELECT payload FROM document WHERE id=1", [], |r| r.get(0))
+            .optional()
+            .map_err(err)?;
+        if let Some(old) = old {
+            let mut document: Value = serde_json::from_str(&old).map_err(err)?;
+            if document["assets"].as_array().is_some_and(|a| !a.is_empty()) {
+                validate_document(&old)?;
+                let tx = db.transaction().map_err(err)?;
+                replace_assets(&tx, document["assets"].as_array().unwrap())?;
+                document["assets"] = Value::Array(vec![]);
+                tx.execute(
+                    "UPDATE document SET payload=?1 WHERE id=1",
+                    [document.to_string()],
+                )
+                .map_err(err)?;
+                tx.commit().map_err(err)?;
+            }
+        }
         fs::create_dir_all(root.join("snapshots")).map_err(err)?;
         private_dir(&root.join("snapshots"))?;
         Ok(Self {
@@ -62,43 +88,59 @@ impl Store {
             root: root.to_path_buf(),
         })
     }
+    fn raw(&self) -> Result<Document> {
+        read_raw(&self.db)
+    }
+    pub fn state(&self) -> Result<MemoryDocument> {
+        let doc = self.raw()?;
+        let memory = doc
+            .payload
+            .map(|p| {
+                serde_json::from_str::<Value>(&p)
+                    .map(|mut d| d["memory"].take())
+                    .map_err(err)
+            })
+            .transpose()?;
+        Ok(MemoryDocument {
+            revision: doc.revision,
+            memory,
+        })
+    }
     pub fn read(&self) -> Result<Document> {
-        Ok(self
-            .db
-            .query_row(
-                "SELECT revision,payload FROM document WHERE id=1",
-                [],
-                |r| {
-                    Ok(Document {
-                        revision: r.get(0)?,
-                        payload: Some(r.get(1)?),
-                    })
-                },
-            )
-            .optional()
-            .map_err(err)?
-            .unwrap_or(Document {
-                revision: 0,
-                payload: None,
-            }))
+        // One read transaction captures matching memory and attachment rows.
+        let tx = self.db.unchecked_transaction().map_err(err)?;
+        let mut doc = read_raw(&tx)?;
+        if let Some(payload) = doc.payload {
+            let mut value: Value = serde_json::from_str(&payload).map_err(err)?;
+            let rows = {
+                let mut stmt = tx
+                    .prepare("SELECT payload FROM assets ORDER BY id")
+                    .map_err(err)?;
+                let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(err)?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(err)?
+            };
+            value["assets"] = Value::Array(
+                rows.iter()
+                    .map(|p| serde_json::from_str(p).map_err(err))
+                    .collect::<Result<Vec<Value>>>()?,
+            );
+            doc.payload = Some(value.to_string());
+        }
+        tx.commit().map_err(err)?;
+        Ok(doc)
     }
     pub fn write(&mut self, payload: &str, expected: i64, restoring: bool) -> Result<()> {
-        validate_document(payload)?;
+        let mut document = validate_document(payload)?;
+        let previous = if restoring {
+            self.read()?.payload
+        } else {
+            None
+        };
         let tx = self.db.transaction().map_err(err)?;
-        let old: Option<(i64, String)> = tx
-            .query_row(
-                "SELECT revision,payload FROM document WHERE id=1",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()
-            .map_err(err)?;
-        if old.as_ref().map_or(0, |x| x.0) != expected {
-            return Err("数据版本已变化，请重新读取后重试；未覆盖现有记录。".into());
-        }
-        // A failed recovery write must abort the database transaction.
+        check_revision(&tx, expected)?;
         if restoring {
-            if let Some((_, ref previous)) = old {
+            if let Some(previous) = previous {
                 let key = format!(
                     "recovery-{}-{}.json",
                     chrono::Local::now().format("%Y-%m-%d"),
@@ -106,12 +148,81 @@ impl Store {
                 );
                 atomic_write(&self.root.join("snapshots").join(key), previous.as_bytes())?;
             }
-            // Imported absolute paths never inherit authority from an old grant.
             tx.execute("DELETE FROM grants", []).map_err(err)?;
         }
-        tx.execute("INSERT INTO document(id,revision,payload) VALUES(1,?1,?2) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,payload=excluded.payload", params![expected+1,payload]).map_err(err)?;
+        replace_assets(&tx, document["assets"].as_array().unwrap())?;
+        document["assets"] = Value::Array(vec![]);
+        tx.execute("INSERT INTO document(id,revision,payload) VALUES(1,?1,?2) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,payload=excluded.payload",params![expected+1,document.to_string()]).map_err(err)?;
         tx.commit().map_err(err)?;
         Ok(())
+    }
+    pub fn write_state(&mut self, memory: &str, expected: i64) -> Result<()> {
+        if memory.len() > MAX_DOCUMENT {
+            return Err("记录超过 400 MB。".into());
+        }
+        let memory: Value = serde_json::from_str(memory).map_err(err)?;
+        validate_memory(&memory)?;
+        let tx = self.db.transaction().map_err(err)?;
+        check_revision(&tx, expected)?;
+        let retained: HashSet<String> = memory["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["mode"] == "copy")
+            .filter_map(|r| r["blobId"].as_str().map(str::to_owned))
+            .collect();
+        for resource in memory["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["mode"] == "copy")
+        {
+            let size: Option<i64> = tx
+                .query_row(
+                    "SELECT size FROM assets WHERE id=?1",
+                    [resource["blobId"].as_str().ok_or("资料标识无效。")?],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(err)?;
+            if size.is_none() || size != resource["size"].as_u64().map(|s| s as i64) {
+                return Err("资料副本缺失或大小不一致；未保存记录。".into());
+            }
+        }
+        let ids = {
+            let mut stmt = tx.prepare("SELECT id FROM assets").map_err(err)?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(err)?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(err)?
+        };
+        for id in ids {
+            if !retained.contains(&id) {
+                tx.execute("DELETE FROM assets WHERE id=?1", [id])
+                    .map_err(err)?;
+            }
+        }
+        let document = serde_json::json!({"format":"youxu-full-backup","version":2,"createdAt":chrono::Utc::now().to_rfc3339(),"memory":memory,"assets":[]});
+        tx.execute("INSERT INTO document(id,revision,payload) VALUES(1,?1,?2) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,payload=excluded.payload",params![expected+1,document.to_string()]).map_err(err)?;
+        tx.commit().map_err(err)?;
+        Ok(())
+    }
+    pub fn needs_daily_backup(&self, date: &str) -> Result<bool> {
+        if !self
+            .root
+            .join("snapshots")
+            .join(format!("daily-{date}.json"))
+            .exists()
+        {
+            return Ok(true);
+        }
+        if let Some(folder) = self.setting("backupDirectory")? {
+            return Ok(self.setting("backupDate")?.as_deref() != Some(date)
+                || self.setting("backupError")?.is_some()
+                || !Path::new(&folder)
+                    .join(format!("ResearchWorkbench-{date}.json"))
+                    .exists());
+        }
+        Ok(false)
     }
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
         self.db
@@ -288,8 +399,8 @@ impl Store {
             .map_err(err)?
             .ok_or("请先通过系统选择框关联或重新定位原件。导入的路径不会自动获得打开权限。")?;
         // A removed resource loses access even if an unused grant remains.
-        let document = self.read()?.payload.ok_or("资料不存在。")?;
-        let value: Value = serde_json::from_str(&document).map_err(err)?;
+        let memory = self.state()?.memory.ok_or("资料不存在。")?;
+        let value = serde_json::json!({"memory":memory});
         if !value["memory"]["resources"].as_array().is_some_and(|a| {
             a.iter()
                 .any(|r| r["id"] == id && r["path"] == path && r["mode"] == "path")
@@ -307,6 +418,104 @@ impl Store {
         }
         Ok(canonical)
     }
+}
+
+fn read_raw(db: &Connection) -> Result<Document> {
+    Ok(db
+        .query_row(
+            "SELECT revision,payload FROM document WHERE id=1",
+            [],
+            |r| {
+                Ok(Document {
+                    revision: r.get(0)?,
+                    payload: Some(r.get(1)?),
+                })
+            },
+        )
+        .optional()
+        .map_err(err)?
+        .unwrap_or(Document {
+            revision: 0,
+            payload: None,
+        }))
+}
+fn check_revision(db: &Connection, expected: i64) -> Result<()> {
+    if read_raw(db)?.revision != expected {
+        return Err("数据版本已变化，请重新读取后重试；未覆盖现有记录。".into());
+    }
+    Ok(())
+}
+fn replace_assets(db: &Connection, assets: &[Value]) -> Result<()> {
+    db.execute("DELETE FROM assets", []).map_err(err)?;
+    let mut stmt = db
+        .prepare("INSERT INTO assets(id,size,payload) VALUES(?1,?2,?3)")
+        .map_err(err)?;
+    for asset in assets {
+        stmt.execute(params![
+            asset["id"].as_str().ok_or("资料标识无效。")?,
+            asset["size"].as_i64().ok_or("资料大小无效。")?,
+            asset.to_string()
+        ])
+        .map_err(err)?;
+    }
+    Ok(())
+}
+fn validate_memory(memory: &Value) -> Result<()> {
+    if memory["version"] != 2 {
+        return Err("记录版本无效。".into());
+    }
+    for name in [
+        "tasks",
+        "journals",
+        "records",
+        "resources",
+        "reports",
+        "workdays",
+        "weeklyReports",
+    ] {
+        if !memory[name]
+            .as_array()
+            .is_some_and(|a| a.len() <= if name == "records" { 200000 } else { 50000 })
+        {
+            return Err(format!("记录中的 {name} 无效。"));
+        }
+    }
+    valid_date(memory["startedOn"].as_str().ok_or("起始日期缺失。")?)?;
+    if !memory["sleepReminder"]["enabled"].is_boolean() {
+        return Err("提醒设置无效。".into());
+    }
+    let mut tasks = HashSet::new();
+    for task in memory["tasks"].as_array().unwrap() {
+        let id = task["id"]
+            .as_str()
+            .filter(|s| !s.is_empty() && s.len() <= 800)
+            .ok_or("任务标识无效。")?;
+        if !tasks.insert(id) {
+            return Err("任务标识重复。".into());
+        }
+    }
+    let mut resources = HashSet::new();
+    for r in memory["resources"].as_array().unwrap() {
+        if !resources.insert(r["id"].as_str().ok_or("资料标识无效。")?)
+            || !tasks.contains(r["taskId"].as_str().ok_or("资料任务无效。")?)
+        {
+            return Err("资料关联无效。".into());
+        }
+        match r["mode"].as_str() {
+            Some("copy") => {
+                if !r["blobId"].is_string() || !r["size"].is_u64() {
+                    return Err("资料副本无效。".into());
+                }
+            }
+            Some("path") => {
+                if !r["path"].is_string() {
+                    return Err("资料路径无效。".into());
+                }
+            }
+            _ => return Err("资料类型无效。".into()),
+        }
+    }
+    Ok(())
 }
 
 pub fn valid_date(value: &str) -> Result<()> {
