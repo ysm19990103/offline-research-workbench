@@ -1,76 +1,90 @@
-# 有序工作台：macOS 桌面版制作路线
+# macOS 桌面工程
 
-当前交付的是可在 Mac 浏览器中离线运行的 HTML，以及完整前端源码。以下是制作原生桌面外壳、持久化数据和文件关联的方案；本包未附已编译的 `.app` 或 `.dmg`。
+本仓库使用 Tauri 2 封装现有 React 工作台。前端业务规则沿用 `lib/tasks.ts`，没有为桌面版重做计时、任务或报告规则。浏览器版继续使用 IndexedDB，桌面版通过 `lib/desktop-storage.ts` 调用 Rust 本地存储。
 
-## 推荐：复用界面，使用 Tauri 2 封装
+## 已实现的能力
 
-现有 React 界面已经能编译成完全离线的静态资源，可复用为 Tauri 桌面窗口。原生层负责本地数据库、文件对话框、打开原件与备份目录。无需建立云服务。
-
-官方依据：[Tauri 架构](https://v2.tauri.app/concept/architecture/)、[macOS 开发依赖](https://v2.tauri.app/start/prerequisites/)、[DMG 打包](https://v2.tauri.app/distribute/dmg/)。
-
-在一台 Mac 上的实际制作顺序：
-
-1. 安装 Node.js（源码要求 22.13+）、Rust，以及 Xcode Command Line Tools。只做桌面程序可运行 `xcode-select --install` 安装命令行工具。
-2. 进入本项目目录，在终端进入该目录。运行 `npm ci`、`npm run build`，得到 `dist/index.html`。开发工具与依赖首次安装需要联网，做好的程序日常运行不需要。
-3. 安装 Tauri 2 开发 CLI：`npm install --save-dev @tauri-apps/cli@^2`，再运行 `npx tauri init` 创建 `src-tauri`。
-4. 将生成的 `src-tauri/tauri.conf.json` 中 `build.frontendDist` 设为 `../dist`，`build.beforeBuildCommand` 设为 `npm run build`；窗口标题设为“有序 · 工作台”，初始大小可用 1440 × 940。界面来自本地资源，不填远程网站地址。使用初始化生成的配置并保留其余必要字段。
-5. 先验证桌面窗口可以读取旧版完整 JSON。单纯套壳仍然是 WebView 的存储；要达到下面的原生文件、备份和后台能力，还需要完成对应的存储与文件适配。
-6. 在 Mac 上运行 `npx tauri build --bundles app,dmg`，生成应用与拖拽安装磁盘映像。按目标机器构建 Apple Silicon 或 Intel 版本；两种机器都要用时可做 Universal 包。请在 macOS 上完成原生构建与实机验证。
-
-窗口与打包配置参见 [Tauri 配置](https://v2.tauri.app/reference/config/)、[macOS 应用包与架构](https://v2.tauri.app/distribute/macos-application-bundle/)。对外分发时按官方流程做 [签名与公证](https://v2.tauri.app/distribute/sign/macos/)。
-
-当前前端内嵌脚本与 CSS。制作桌面生产包时可改为本地独立 JS/CSS，并配置相应 CSP；若保留内嵌脚本，应按构建产物生成匹配的脚本哈希。最低 macOS 版本需结合系统 WebKit 对现有 CSS 和 JavaScript 的支持实测确定。
-
-## 桌面版应接入的原生能力
-
-| 功能 | 具体实现 |
+| 能力 | 实现与边界 |
 | --- | --- |
-| 数据保存 | 用 SQLite 存任务、子任务关系、计时片段、心得、资料索引和报告快照；复用现有 UUID 与日期，提供旧 JSON 导入。 |
-| 文件副本 | 保存到应用自己的数据目录中的 attachments 子目录；数据库保存文件 ID、名称、类型和相对路径。 |
-| 原文件关联 | 用户在系统对话框选择课题目录；保存目录书签和相对路径。浏览器版导入的纯文本路径需在 Mac 重新授权关联。 |
-| 打开原件 | 用系统默认程序打开 PDF、表格、代码或目录；增加“在 Finder 显示”。 |
-| 每日备份 | 在原生层按本地日期执行一次，备份数据库一致性快照与附件索引/副本；临时写完、校验成功后再替换目标文件，显示最后成功日期。 |
-| 多窗口计时 | 使用单实例或数据库事务保护，继续沿用每天结束后锁定、暂停不计时的规则。 |
-| 截止日期提醒 | 按设备本地日期在截止前一天触发，保留每项任务与截止日期的提醒去重状态；日期修改或任务完成后同步更新排程。 |
-| 每周词云 | 应用运行时每周日刷新一次本地任务关键词，启动时检查错过的更新；保留词云统计范围。 |
-| 22:00 提醒 | 调用 macOS 本地通知，按本地时间排程；如需退出程序后仍提醒，应使用系统支持的本地通知触发器，不依赖网页计时器。 |
+| 本地保存 | SQLite WAL + FULL 同步；版本化文档保留完整 Memory 和 UUID，附件编码单独存行；导入、恢复及附件修改与记录在同一事务中提交。日常编辑只传输和保存文字记录，每次更新检查修订号。不是复制正在使用的数据库文件。 |
+| 窗口与计时 | 单实例；第二次打开聚焦已有窗口。沿用全局计时、暂停不计时、当天结束锁定和跨午夜结算。关窗不代表暂停，计时依时间戳继续。 |
+| 文件 / 目录关联 | 系统选择框授权具体文件或目录；资料 ID 对应规范路径。打开时再次校验路径、类型和资料关联；丢失原件不会删除记录。 |
+| 打开原件 | macOS 默认应用打开，或在 Finder 定位。没有通用 shell / 任意路径打开权限；应用包、脚本、可执行内容和未知类型只允许 Finder 定位。 |
+| 附件 | 沿用单文件 50 MB、总量 200 MB 限额。附件与任务在同一事务内保存，JSON 导出包含字节。打开副本会写入私有预览目录，不会改动原件。 |
+| 备份 | 每个本地日期一个不可变的完整 JSON 快照，保留最近 30 个日期；可选系统目录写入。临时文件写完、落盘并校验后原子替换。 |
+| 恢复点 | 恢复前原生层必须成功写出当前完整恢复点，才能提交新数据。恢复点不随 30 天每日快照清理，可在备份列表导出和恢复。 |
+| 浏览器迁移 | 支持现有 `youxu-full-backup` v2 和现有前端支持的旧版 Memory 迁移；严格验证附件、层级和业务字段后才写入。导入会清除原文件授权，必须重新选择。 |
+| 系统提醒 | 原生 Objective-C 接入 `UNUserNotificationCenter`。任务截止前一天 09:00；该日较晚添加则尽快提醒；22:00 每日重复休息提醒。完成、删除、改期会更新系统排程。 |
+| 完全离线 | React、样式、历法均打包本地资源；无 CDN、服务器、远程模型、遥测或云账户。 |
 
-可使用 Tauri 的 [SQL 插件](https://v2.tauri.app/plugin/sql/)、[文件系统插件](https://v2.tauri.app/plugin/file-system/)、[对话框插件](https://v2.tauri.app/plugin/dialog/) 和 [Opener 插件](https://v2.tauri.app/plugin/opener/)。这些是待接入的桌面能力，当前 HTML 不会调用它们。
+数据默认位于系统的应用数据目录，标识为 `org.offline-research.workbench`。请通过界面的完整 JSON 导出迁移，不要仅复制正在使用的 `.sqlite3` 文件。保留稳定应用标识才能继续读取既有桌面数据。
 
-SQLite 开启 WAL 时不要只复制正在使用中的 `.db` 文件来冒充完整备份；应使用一致性备份机制，例如 [SQLite Online Backup API](https://www.sqlite.org/backup.html)。导入或恢复应先校验内容和附件，再在事务中替换；保留当前版本的当天结束锁定规则。
+当前不启用 App Sandbox，适用于未来完成 Developer ID 签名、公证后的独立分发路线。若改为 App Store / Sandbox 分发，需另外接入 security-scoped bookmark，并重新验证持久文件访问；当前记录的路径不等于沙盒授权。
 
-若要求完全退出程序后也每天自动备份，需要额外的 macOS 后台任务，例如用户级 LaunchAgent，并处理数据库并发与电脑休眠后的补执行。否则可采用“应用运行时每天一次，启动时检查并补做当天”的清晰规则。网页外壳本身不会自动获得后台运行能力。
+## 从浏览器迁移
 
-## 课题与资料的关联方式
+1. 在原浏览器工作台导出“当前完整备份”，保留原 HTML、浏览器数据与这份 JSON。
+2. 打开桌面版，进入“备份与恢复”，选择“从 JSON 恢复”。
+3. 核对确认框中的任务、心得、计时天数、心情日记和附件数量。点击“备份当前并恢复”，先完成当前数据导出；取消保存会中止恢复。
+4. 原生层另外创建不可变恢复点，然后以一个 SQLite 事务替换记录与附件。校验、恢复点写入或提交失败时，旧数据库仍保留。
+5. 检查四个板块、任务层级、历史心得、心情原文、工时、归档报告和附件。当天已结束的工时仍保持锁定。
+6. 进入“课题资料”，对原文件路径使用“重新定位文件 / 目录”。不会自动打开导入路径。
+7. 迁移核对完成前，不删除旧浏览器数据或原始 JSON。恢复是替换当前状态，未进行两套数据的自动合并；恢复前数据在导出的 JSON 和恢复点中保留。
 
-建议每个课题使用一个本地根目录，内部按用途放在 papers、code、tables、assets、outputs 子目录中。工作台索引这个目录，不强制搬动现有文件。
+只含 Memory 的备份若引用了未包含的附件，会拒绝恢复，不能把缺少附件的备份当作完整迁移。备份包含私人日记、工时和文件字节，未加密，应放在源码目录之外。
 
-| 类型 | 建议关联 | 工作台中的操作 |
-| --- | --- | --- |
-| 论文 | PDF 原件；需要固定版本时再收一份副本 | 默认 PDF 阅读器打开、Finder 显示、关联阅读笔记 |
-| 代码 | 本地代码仓库的目录 | 打开目录或代码编辑器，不把整个仓库重复塞进数据库 |
-| 表格 | xlsx / csv 原件 | 系统默认应用打开；可另存一个关键分析版本作为结果附件 |
-| 素材 | 图片、视频或素材目录 | 打开原件、Finder 显示；大文件优先目录关联 |
-| 分析结果 | outputs 内图表、结果表、报告 | 关联完成事项和日期，方便月报回到成果 |
+## 提醒、后台与退出
 
-索引可保存：资料 ID、课题/任务 ID、类型、显示名、目录书签、相对路径、文件大小和最后修改时间。需要版本核对的论文或结果文件，再保存内容摘要。文件找不到时提供“重新定位”；不应直接删除记录或悄悄指向同名文件。
+首次在“备份与恢复 → macOS 系统提醒”点击启用，让 macOS 请求通知权限。关闭休息开关会撤销每日排程。任务提醒用任务 ID + 截止日期生成稳定标识，保存排程账本以防重复；修改任务后异步同步，备份页可查看或手动重试。
 
-在采用 App Sandbox 的 macOS 程序中，持久访问用户选中的目录应使用 security-scoped bookmark，并处理书签失效和重新授权。仅记一个绝对路径不等于持有持续访问权限。参见 [Apple：从 macOS App Sandbox 访问文件](https://developer.apple.com/documentation/security/accessing-files-from-the-macos-app-sandbox)。
+已排程的通知由 macOS 负责，可在工作台退出后显示；是否出现和出现时间仍受通知权限、专注模式、关机及休眠影响。每轮排程最近 59 项任务与 1 项每日休息通知；应用运行时每分钟补充，应用长期退出后不会自动补充超出该队列的新提醒。系统排程失败不会被描述为成功，界面支持重试。
 
-Opener 提供 `openPath`（交给默认程序）和 `revealItemInDir`（在 Finder 中显示）。权限范围限定到用户选择并关联的资料目录。参见 [Opener API](https://v2.tauri.app/reference/javascript/opener/)。
+每日备份由 Rust 线程执行，关闭浏览器不会影响运行中的桌面进程。**完全退出桌面程序后不执行每日备份**，下次启动补做当天，不伪造退出期间每一天的快照。词云和归档报告仍在 React 启动 / 日期变化时按原规则更新；没有安装 LaunchAgent，也没有后台自动升级服务。
 
-计时区只有一套总计时：开始、暂停、继续、结束。任务与板块不单独计时，任务详情中的文件关联也不会改变时长。工作心得与心情日记分开保存；报告只读取心情评分，原始心情感悟仅留在日记中。
+## 在 Mac 上构建
 
-## 从本包开始开发时的文件入口
+安装 Node.js 22.13+、Rust stable 和 Xcode Command Line Tools，然后运行：
 
-- `app/workbench.tsx`：工作台主界面与计时按钮。
-- `app/task-views.tsx`：任务层级、事项编辑。
-- `app/data-views.tsx`：资料与备份界面。
-- `app/review-views.tsx`：心得、周报、月报界面。
-- `lib/tasks.ts`：数据模型、迁移、计时与报告规则。
-- `lib/storage.ts`：当前浏览器存储接口；桌面版将其接到 SQLite 与原生文件接口。
-- `lib/report-export.ts`：工时/心情图表、CSV 与可离线分享的报告。
-- `app/mood-view.tsx`：独立心情日记。
-- `lib/word-cloud.ts`、`app/word-cloud-view.tsx`：本地分词、更新规则与右侧词云。
+```sh
+npm ci
+npm run typecheck
+npm run build
+npm test
+npm run test:desktop
+cargo test --manifest-path src-tauri/Cargo.toml --locked --no-default-features
+npm run desktop:build
+```
 
-先保留现有业务规则与备份兼容，再替换存储和文件接口，可以减少界面重写与数据迁移的风险。
+本机架构产物在 `src-tauri/target/release/bundle/macos/` 与 `bundle/dmg/`。显式架构构建：
+
+```sh
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+npm run desktop:build -- --target aarch64-apple-darwin --ci
+npm run desktop:build -- --target x86_64-apple-darwin --ci
+npm run desktop:build:universal -- --ci
+```
+
+Universal 是可用的构建命令；是否已经实际生成和验证，要查看对应构建记录。当前 CI 分开构建两种原生架构，避免把交叉编译成功当作在目标架构运行成功。
+
+配置的最低系统为 **macOS 13.3**，需考虑现有 Tailwind 4 / WebKit 的支持范围。最低系统运行与真实设备交互需另做验收。开发模式使用静态资源；改前端代码后需重新运行开发命令或构建，不依赖联网的开发服务器。
+
+## CI、安装包与实际验证范围
+
+`.github/workflows/macos-desktop.yml` 在分支提交、PR 和手动运行时执行：
+
+- Linux：类型检查、原有业务测试、桌面存储桥测试、两种资源构建、隐私检查。
+- macOS 15 Apple Silicon 与 macOS 15 Intel：Rust 原生测试、Objective-C 桥编译、完整 Tauri `.app` 和 `.dmg` 构建。
+- 检查 Mach-O 架构、ad hoc 签名完整性、DMG 完整性；启动真实应用包并检查进程保持运行 8 秒。
+- 上传 `.dmg`、保留 Unix 属性的 `.app.tar.gz`、SHA-256 清单与 `verification.json`。下载后应以 `.dmg` 或 `.app.tar.gz` 为准，ZIP 中直接上传的 `.app` 可能丢失权限。
+
+`verification.json` 明确记录每项是否实际完成。启动进程冒烟检查不能证明 React 界面、通知授权、退出后通知投递、文件选择框、默认应用、真实数据迁移、休眠恢复与最低系统兼容性已在实机通过。
+
+当前工作区的可重复测试包括原有 35 项业务规则、7 项桌面桥迁移 / 失败恢复测试及 15 项 Rust 原生测试。已在 macOS 15.8.2 / Apple Silicon 与 macOS 15.7.9 / Intel 完成应用和 DMG 构建、架构与完整性检查、启动及 React / SQLite 通信验证。详细记录见 [docs/VALIDATION.md](docs/VALIDATION.md)，后续提交以对应 Actions 运行结果为准。
+
+## 签名、公证与发布
+
+当前配置 `signingIdentity: "-"`，只生成 **ad hoc 开发测试包**。工作流不接收或导出 Developer ID、Apple ID、公证密码、API 密钥或开发者证书，也不创建正式 Release。
+
+未经 Developer ID 签名、公证、staple 与真实设备验收的包，不是正式可分发版本。Gatekeeper 可能阻止安装；不要通过关闭系统安全机制来代替签名。未来正式发布时应在 GitHub Secrets / 受控 Keychain 中提供凭据并另加受保护的发布流程，不能把凭据写入仓库。
+
+官方参考：[Tauri macOS 打包](https://v2.tauri.app/distribute/macos-application-bundle/)、[签名与公证](https://v2.tauri.app/distribute/sign/macos/)、[CSP](https://v2.tauri.app/security/csp/)、[Apple 本地通知](https://developer.apple.com/documentation/UserNotifications/scheduling-a-notification-locally-from-your-app)。Tauri 标准通知插件只在移动端提供排程，因此这里使用 macOS 原生接口。
