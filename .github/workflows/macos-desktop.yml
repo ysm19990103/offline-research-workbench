@@ -1,0 +1,74 @@
+name: macOS desktop development builds
+on:
+  push:
+    branches: [main, 'feat/tauri-macos-desktop']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - run: npm run test:desktop
+      - run: npm run build:desktop
+      - run: npm run privacy:check
+  macos:
+    needs: frontend
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.3'
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - name: Native storage, recovery, file access and scheduling tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --no-default-features
+      - name: Build app and DMG (ad hoc development signature)
+        run: npm run desktop:build -- --target ${{ matrix.target }} --ci
+      - name: Check native architecture, app startup and disk image
+        run: node scripts/verify-macos.mjs ${{ matrix.target }}
+      - name: Upload development packages and verification record
+        uses: actions/upload-artifact@v4
+        with:
+          name: workbench-UNNOTARIZED-${{ matrix.target }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/verification.json
+            src-tauri/target/${{ matrix.target }}/release/bundle/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30

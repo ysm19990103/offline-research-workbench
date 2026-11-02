@@ -34,7 +34,7 @@ npm run privacy:check
 
 ## 数据与运行边界
 
-数据保存在当前浏览器的 IndexedDB 中。源码、构建文件和个人运行数据是分开的；复制 HTML 不会附带后来输入的任务、日记或资料。手动导出的完整 JSON 包含这些私人内容，应放在源码目录之外。
+浏览器版数据保存在当前浏览器的 IndexedDB 中。桌面版使用本机 SQLite，并通过事务同时保存记录和附件。源码、构建文件和个人运行数据是分开的；复制 HTML 不会附带后来输入的任务、日记或资料。手动导出的完整 JSON 包含这些私人内容，应放在源码目录之外。
 
 每日首次打开生成一次快照，保留最近 30 个日期。在支持目录授权的浏览器中，可以把快照写入选定的本地目录。清理浏览器数据也会清理浏览器中的记录与快照，外部备份需自行保留。
 
@@ -42,7 +42,7 @@ npm run privacy:check
 
 心情晴雨表中，1–3 分显示雨、4–6 分显示多云、7–10 分显示晴，仅表达自评分。未评分日期留空，不补 0、不跨缺失日期连线。CSV 导出到所选月份的最后一天，当前月则到今天。
 
-浏览器只能读取用户选择导入的文件。路径关联保存位置，不能直接调用本地应用；原生文件打开、系统通知和后台备份的桌面封装路线见 [MACOS_DESKTOP.md](MACOS_DESKTOP.md)。当前交付不包含编译后的 macOS 应用。
+浏览器只能读取用户选择导入的文件。路径关联保存位置，不能直接调用本地应用；桌面版的文件打开、系统排程提醒、原生备份与迁移说明见 [MACOS_DESKTOP.md](MACOS_DESKTOP.md)。仓库现已包含 Tauri 2 桌面工程；macOS 开发安装包由 GitHub Actions 分别构建，签名、公证与实机验证状态见构建记录。
 
 ## 源码入口
 
@@ -65,3 +65,27 @@ npm run privacy:check
 
 第三方界面与运行依赖的许可原文保存在 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt) 和 `vendor/` 中。脱敏范围及数据边界见 [PRIVACY.md](PRIVACY.md)。
 
+
+## macOS 桌面版
+
+完整保留现有 React 界面、四类事项、统一计时、心情日记与离线历法。新增原生文件与目录关联、默认应用打开 / Finder 定位、SQLite 事务保存、每日 JSON 快照、恢复前恢复点，以及 macOS 系统排程提醒。
+
+```sh
+npm ci
+npm run desktop:dev
+# 在 Mac 上构建本机架构的 .app 与 .dmg
+npm run desktop:build
+# 同时装有两种 Rust 目标时，可构建 Universal 版本
+npm run desktop:build:universal
+```
+
+开发需要 Node.js 22.13+、Rust stable（建议使用锁文件对应的当前 stable）和 Xcode Command Line Tools。目标最低系统配置为 macOS 13.3，最低系统的实际运行验证尚未完成。CI 分别使用 Apple Silicon 和 Intel 的 macOS 15 runner；构建通过不等于已经验证全部真实设备行为。
+
+旧版先导出完整 JSON，再在桌面版“备份与恢复”导入。确认框会显示任务、心得、心情日记、工时和附件数量；恢复前先导出当前数据，原生层还会保留独立恢复点。所有导入路径都需重新选择原件才可打开。保留旧浏览器数据和原始备份，核对后再清理。
+
+[macOS 构建流程](../../actions/workflows/macos-desktop.yml)生成 **UNNOTARIZED 开发测试包**及 `verification.json`，不自动发布正式 Release。包只有 ad hoc 开发签名，未完成 Developer ID 签名、公证和实机验收，不应当作正式可分发版本。安装包不包含运行后产生的个人数据。
+
+```sh
+npm run test:desktop
+cargo test --manifest-path src-tauri/Cargo.toml --locked --no-default-features
+```

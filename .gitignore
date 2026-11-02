@@ -28,3 +28,16 @@ user-content/
 *备份*.json
 *backup*.json
 
+
+desktop-dist/
+.desktop-tests/
+src-tauri/target/
+src-tauri/gen/
+*.app/
+*.dmg
+*.p12
+*.p8
+*.mobileprovision
+*.keychain*
+*.pem
+*.tmp

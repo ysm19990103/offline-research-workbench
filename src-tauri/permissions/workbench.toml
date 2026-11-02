@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "workbench-native"
+description = "Workbench persistence and user-mediated document access; no arbitrary path or command execution."
+commands.allow = ["read_document", "write_document", "ensure_daily_backup", "list_snapshots", "read_snapshot", "backup_status", "choose_backup_directory", "disconnect_backup_directory", "choose_resource", "open_resource", "open_asset", "export_document", "save_download", "sync_notifications"]
