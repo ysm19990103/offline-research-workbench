@@ -2,9 +2,9 @@ import {readdirSync,readFileSync,statSync} from 'node:fs';
 import {relative,join} from 'node:path';
 
 const root=process.cwd();
-const skipped=new Set(['.git','node_modules','.offline-build','.offline-tests']);
-const allowedJson=new Set(['package.json','package-lock.json','tsconfig.json','lib/lunar-months.json']);
-const licenseFiles=new Set(['THIRD_PARTY_NOTICES.txt','vendor/shadcn-tailwind-4.13.0.LICENSE.md']);
+const skipped=new Set(['.git','node_modules','.offline-build','.offline-tests','.desktop-tests','target','gen']);
+const allowedJson=new Set(['package.json','package-lock.json','tsconfig.json','lib/lunar-months.json','src-tauri/tauri.conf.json','src-tauri/capabilities/main.json']);
+const licenseFiles=new Set(['THIRD_PARTY_NOTICES.txt','vendor/shadcn-tailwind-4.13.0.LICENSE.md','desktop-dist/THIRD_PARTY_NOTICES.txt']);
 const patterns=[
  ['private key',/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/],
  ['GitHub credential',/\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b/],
@@ -23,16 +23,18 @@ function inspect(dir){
   if(skipped.has(name))continue;
   const path=join(dir,name),rel=relative(root,path).replaceAll('\\','/');
   if(statSync(path).isDirectory()){
-   if(['.openai','.wrangler','data','private','backups','exports','attachments','user-content'].includes(name))failures.push([rel,'private or deployment directory']);
+   if(['.openai','.wrangler','data','private','backups','exports','attachments','user-content','preview','snapshots'].includes(name))failures.push([rel,'private or deployment directory']);
    else inspect(path);
    continue;
   }
   count++;
-  if(name.startsWith('.env')||/\.(?:csv|xlsx?|pdf|docx|sqlite3?|db|zip|png|jpe?g|mp4|log)$/i.test(name))failures.push([rel,'data or local configuration file']);
+  if(/^src-tauri\/icons\/(?:32x32|128x128|128x128@2x)\.png$/.test(rel)||rel==='src-tauri/icons/icon.icns')continue;
+  if(/\.(?:sqlite3?|db)-(?:wal|shm)$/.test(name)||name.startsWith('.env')||/\.(?:csv|xlsx?|pdf|docx|sqlite3?|db|zip|png|jpe?g|mp4|log|p12|p8|pem|mobileprovision|dmg)$/i.test(name))failures.push([rel,'data or local configuration file']);
   if(name.endsWith('.json')&&!allowedJson.has(rel))failures.push([rel,'unexpected JSON payload']);
+  if(/^src-tauri\/icons\/(?:32x32|128x128|128x128@2x)\.png$/.test(rel)||rel==='src-tauri/icons/icon.icns')continue;
   const text=readFileSync(path,'utf8');
   for(const [label,re] of patterns)if(re.test(text))failures.push([rel,label]);
-  if(!licenseFiles.has(rel)&&email.test(text))failures.push([rel,'email outside third-party license']);
+  if(!licenseFiles.has(rel)&&email.test(text.replaceAll('128x128@2x.png','icon-retina.png')))failures.push([rel,'email outside third-party license']);
   if(/^(?:app|lib|offline)\//.test(rel)&&/\b(?:fetch\s*\(|XMLHttpRequest|WebSocket|sendBeacon\s*\()/.test(text))failures.push([rel,'runtime network API']);
  }
 }
