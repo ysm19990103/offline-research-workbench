@@ -83,9 +83,11 @@ npm run desktop:build:universal
 
 旧版先导出完整 JSON，再在桌面版“备份与恢复”导入。确认框会显示任务、心得、心情日记、工时和附件数量；恢复前先导出当前数据，原生层还会保留独立恢复点。所有导入路径都需重新选择原件才可打开。保留旧浏览器数据和原始备份，核对后再清理。
 
-[macOS 构建流程](../../actions/workflows/macos-desktop.yml)生成 **UNNOTARIZED 开发测试包**及 `verification.json`，不自动发布正式 Release。包只有 ad hoc 开发签名，未完成 Developer ID 签名、公证和实机验收，不应当作正式可分发版本。安装包不包含运行后产生的个人数据。
+[macOS 构建流程](https://github.com/ysm19990103/offline-research-workbench/actions/workflows/macos-desktop.yml)生成 **UNNOTARIZED 开发测试包**及 `verification.json`，不自动发布正式 Release。包只有 ad hoc 开发签名，未完成 Developer ID 签名、公证和实机验收，不应当作正式可分发版本。安装包不包含运行后产生的个人数据。
 
 ```sh
 npm run test:desktop
 cargo test --manifest-path src-tauri/Cargo.toml --locked --no-default-features
 ```
+
+已完成双架构构建及应用启动验证，详细环境、证据与未覆盖范围见 [验证记录](docs/VALIDATION.md)。

@@ -23,13 +23,13 @@ function inspect(dir){
   if(skipped.has(name))continue;
   const path=join(dir,name),rel=relative(root,path).replaceAll('\\','/');
   if(statSync(path).isDirectory()){
-   if(['.openai','.wrangler','data','private','backups','exports','attachments','user-content'].includes(name))failures.push([rel,'private or deployment directory']);
+   if(['.openai','.wrangler','data','private','backups','exports','attachments','user-content','preview','snapshots'].includes(name))failures.push([rel,'private or deployment directory']);
    else inspect(path);
    continue;
   }
   count++;
   if(/^src-tauri\/icons\/(?:32x32|128x128|128x128@2x)\.png$/.test(rel)||rel==='src-tauri/icons/icon.icns')continue;
-  if(name.startsWith('.env')||/\.(?:csv|xlsx?|pdf|docx|sqlite3?|db|zip|png|jpe?g|mp4|log|p12|p8|pem|mobileprovision|dmg)$/i.test(name))failures.push([rel,'data or local configuration file']);
+  if(/\.(?:sqlite3?|db)-(?:wal|shm)$/.test(name)||name.startsWith('.env')||/\.(?:csv|xlsx?|pdf|docx|sqlite3?|db|zip|png|jpe?g|mp4|log|p12|p8|pem|mobileprovision|dmg)$/i.test(name))failures.push([rel,'data or local configuration file']);
   if(name.endsWith('.json')&&!allowedJson.has(rel))failures.push([rel,'unexpected JSON payload']);
   if(/^src-tauri\/icons\/(?:32x32|128x128|128x128@2x)\.png$/.test(rel)||rel==='src-tauri/icons/icon.icns')continue;
   const text=readFileSync(path,'utf8');
