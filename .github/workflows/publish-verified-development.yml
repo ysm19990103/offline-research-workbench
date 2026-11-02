@@ -1,0 +1,72 @@
+name: Publish verified macOS development prerelease
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/publish-verified-development.yml]
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write
+concurrency:
+  group: publish-verified-development-20261102
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ysm19990103/offline-research-workbench
+    steps:
+      - name: Verify original artifacts, publish prerelease and verify public downloads
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib, io, json, pathlib, subprocess, zipfile
+          repo = "ysm19990103/offline-research-workbench"
+          out = pathlib.Path("release-assets"); out.mkdir()
+          def api(path):
+              return subprocess.check_output(["gh", "api", "repos/"+repo+"/"+path])
+          run = json.loads(api("actions/runs/41378209818"))
+          assert run["conclusion"] == "success" and run["head_sha"] == "ac961798e91523ebd2bd3eb0ef0810fc9c9cb839"
+          for arch, aid, digest in [
+           ("aarch64",13112153114,"b30c0dcf15b471e99a92d89692ab8ea6604c577cd7296c9858eb93e594425f17"),
+           ("x86_64",13112661440,"dc751567c921ae11fc4ae74db053e30c3efdb094e6eeb4394b930c3da1b7f909")]:
+              raw = api(f"actions/artifacts/{aid}/zip")
+              assert hashlib.sha256(raw).hexdigest() == digest
+              z = zipfile.ZipFile(io.BytesIO(raw))
+              manifest = z.read("verification.json")
+              v = json.loads(manifest)
+              assert v["commit"] == "effbe68a4565a1a23dfe71e43e1d75605f63b142"
+              assert v["target"] == arch+"-apple-darwin" and v["notarized"] is False
+              assert v["reactStorageHandshake"] is True and v["dmgIntegrity"] == "passed"
+              checksums = z.read("SHA256SUMS.txt")
+              for line in checksums.decode().splitlines():
+                  expected, name = line.split("  ",1)
+                  matches = [n for n in z.namelist() if pathlib.PurePosixPath(n).name == name]
+                  assert len(matches)==1
+                  content = z.read(matches[0])
+                  assert hashlib.sha256(content).hexdigest()==expected
+                  if name.endswith(".dmg"):
+                      (out/f"Research-Workbench-0.3.0-UNNOTARIZED-{arch}.dmg").write_bytes(content)
+              (out/f"verification-{arch}.json").write_bytes(manifest)
+              (out/f"ORIGINAL-SHA256SUMS-{arch}.txt").write_bytes(checksums)
+          (out/"INSTALL.md").write_text("# Research Workbench 0.3.0 development prerelease — UNNOTARIZED\n\nThese are ad hoc signed development builds, NOT Apple Developer ID signed or notarized. Physical-device acceptance testing is incomplete. Notification delivery after application exit, real file dialogs/default-app opening, and minimum macOS 13.3 runtime support remain unverified. CI startup and SQLite handshake checks are not full user acceptance tests.\n\n## Install\n1. Choose Apple Silicon (aarch64) for an Apple chip, or Intel (x86_64) for an Intel Mac (Apple menu > About This Mac).\n2. Download the matching DMG and SHA256SUMS.txt. In Terminal, run `shasum -a 256 <downloaded-DMG>` and compare its full hash with the matching entry.\n3. Open the DMG and drag Research Workbench to Applications.\n4. macOS may block this unnotarized app. Only if you trust this source and verified the hash, use System Settings > Privacy & Security > Open Anyway after the blocked launch. Do not disable Gatekeeper globally.\n5. Export and retain your original browser JSON backup before migration. Test with fictional records first; check records and attachments before relying on the desktop copy.\n\n## Provenance and verification\nOriginal verified workflow: https://github.com/ysm19990103/offline-research-workbench/actions/runs/41378209818\nPR head: ac961798e91523ebd2bd3eb0ef0810fc9c9cb839.\nActual CI checkout/test merge recorded in both manifests: effbe68a4565a1a23dfe71e43e1d75605f63b142 (the release tag targets this exact built commit).\nInstallers are copied byte-for-byte from the existing artifacts, not rebuilt.\nBoth artifact ZIP digests and every original manifest checksum are verified before publishing.\nArchitecture-specific verification JSON and original checksum manifests are included; the combined SHA256SUMS.txt covers all other release assets.\nOnly installers and verification/installation text are published. No user databases, personal records, API credentials or signing certificates are added.\nDaily backups require the app to run; post-exit notification delivery remains unverified.\n")
+          (out/"SHA256SUMS.txt").write_text("".join(hashlib.sha256(p.read_bytes()).hexdigest()+"  "+p.name+"\n" for p in sorted(out.iterdir())))
+          PY
+          TAG=v0.3.0-dev.20261102
+          gh release create "$TAG" release-assets/* --repo "$GH_REPO" --target effbe68a4565a1a23dfe71e43e1d75605f63b142 --title "v0.3.0-dev.20261102 — UNNOTARIZED macOS development builds" --notes-file release-assets/INSTALL.md --prerelease --draft
+          gh release download "$TAG" --repo "$GH_REPO" --dir downloaded
+          (cd downloaded && sha256sum --check SHA256SUMS.txt)
+          gh release edit "$TAG" --repo "$GH_REPO" --draft=false --prerelease --latest=false
+          python - <<'PY'
+          import hashlib, json, pathlib, urllib.request, subprocess
+          r=json.loads(subprocess.check_output(["gh","release","view","v0.3.0-dev.20261102","--repo","ysm19990103/offline-research-workbench","--json","assets,isPrerelease,isDraft,url"]))
+          assert r["isPrerelease"] and not r["isDraft"]
+          assert len(r["assets"])==8
+          for a in r["assets"]:
+              data=urllib.request.urlopen(a["url"]).read()
+              assert hashlib.sha256(data).digest()==hashlib.sha256((pathlib.Path("release-assets")/a["name"]).read_bytes()).digest()
+              print("Public download verified:",a["name"])
+          print(r["url"])
+          PY
+          
