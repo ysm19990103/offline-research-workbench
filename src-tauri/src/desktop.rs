@@ -326,6 +326,14 @@ async fn sync_notifications(app: AppHandle, request_permission: bool) -> Result<
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri::plugin::Builder::new("local-navigation")
+                .on_navigation(|_, url| {
+                    url.scheme() == "tauri" && url.host_str() == Some("localhost")
+                        || url.scheme() == "http" && url.host_str() == Some("tauri.localhost")
+                })
+                .build(),
+        )
         // Stable application identifier + single instance prevent concurrent timers.
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("main") {

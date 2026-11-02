@@ -68,7 +68,13 @@ pub fn plan(memory: &Value, now: DateTime<Local>, ledger: &Ledger) -> (Vec<Notic
         else {
             continue;
         };
-        let at = at.timestamp().max(now.timestamp() + 5) as f64;
+        let calculated = at.timestamp().max(now.timestamp() + 5) as f64;
+        // Frequent saves must not push a same-day catch-up reminder into the future.
+        let at = if at <= now {
+            ledger.get(&id).copied().unwrap_or(calculated)
+        } else {
+            calculated
+        };
         jobs.push(Notice {
             id,
             title: "明天截止".into(),

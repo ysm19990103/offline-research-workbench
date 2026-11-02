@@ -114,6 +114,7 @@ fn grants_require_selection_and_never_come_from_json() {
     let mut s = Store::open(temp.path()).unwrap();
     let path = temp.path().join("document.txt");
     std::fs::write(&path, "synthetic").unwrap();
+    let path = std::fs::canonicalize(path).unwrap();
     let mut value = document();
     value["memory"]["resources"] =
         json!([{"id":"r","taskId":"synthetic-task","mode":"path","path":path.to_str().unwrap()}]);
@@ -148,6 +149,7 @@ fn changed_symlink_and_backup_symlinks_are_rejected() {
     let mut s = Store::open(temp.path()).unwrap();
     let path = temp.path().join("selected.txt");
     std::fs::write(&path, "test").unwrap();
+    let path = std::fs::canonicalize(path).unwrap();
     let mut value = document();
     value["memory"]["resources"] =
         json!([{"id":"r","taskId":"synthetic-task","mode":"path","path":path.to_str().unwrap()}]);
@@ -183,6 +185,10 @@ fn late_same_day_task_schedules_once_and_leisure_has_no_deadline() {
     let now = Local.with_ymd_and_hms(2026, 11, 3, 18, 0, 0).unwrap();
     let (jobs, ledger) = plan(&value, now, &Ledger::new());
     assert_eq!(jobs[0].at, now.timestamp() as f64 + 5.0);
+    assert_eq!(
+        plan(&value, now + chrono::Duration::seconds(2), &ledger).0[0].at,
+        jobs[0].at
+    );
     assert_eq!(
         plan(&value, now + chrono::Duration::seconds(10), &ledger)
             .0
