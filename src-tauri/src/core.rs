@@ -207,7 +207,21 @@ impl Store {
             let doc = validate_document(&read_document_file(&entry.path())?)?;
             let created = doc["createdAt"].as_str().unwrap_or_default().to_owned();
             out.push(BackupInfo {
-                date: created.chars().take(10).collect(),
+                date: if key.starts_with("daily-") {
+                    key.strip_prefix("daily-")
+                        .and_then(|s| s.strip_suffix(".json"))
+                        .filter(|d| valid_date(d).is_ok())
+                        .unwrap_or("")
+                        .to_owned()
+                } else {
+                    chrono::DateTime::parse_from_rfc3339(&created)
+                        .map(|d| {
+                            d.with_timezone(&chrono::Local)
+                                .format("%Y-%m-%d")
+                                .to_string()
+                        })
+                        .unwrap_or_else(|_| created.chars().take(10).collect())
+                },
                 created_at: created,
                 key: key.clone(),
                 tasks: doc["memory"]["tasks"].as_array().unwrap().len(),

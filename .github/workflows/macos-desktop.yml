@@ -1,13 +1,13 @@
 name: macOS desktop development builds
 on:
   push:
-    branches: [main, 'feat/tauri-macos-desktop']
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: macos-${{ github.ref }}
+  group: macos-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
   frontend:

@@ -38,7 +38,7 @@ char *wb_sync_notifications(const char *input) {
         if(status==UNAuthorizationStatusNotDetermined && [payload[@"requestPermission"] boolValue]) {
             dispatch_semaphore_t permission=dispatch_semaphore_create(0);
             __block BOOL granted=NO;
-            [center requestAuthorizationWithOptions:UNAuthorizationOptionAlert|UNAuthorizationOptionSound completionHandler:^(BOOL allowed,NSError *error){granted=allowed;dispatch_semaphore_signal(permission);}];
+            [center requestAuthorizationWithOptions:UNAuthorizationOptionAlert|UNAuthorizationOptionSound completionHandler:^(BOOL allowed,NSError *error){(void)error;granted=allowed;dispatch_semaphore_signal(permission);}];
             if(dispatch_semaphore_wait(permission,dispatch_time(DISPATCH_TIME_NOW,120*NSEC_PER_SEC))!=0)return WBResult(@"notDetermined",0,@"请完成系统通知授权后重试。");
             status=granted?UNAuthorizationStatusAuthorized:UNAuthorizationStatusDenied;
         }

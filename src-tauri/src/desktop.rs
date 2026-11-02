@@ -5,13 +5,7 @@ use crate::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
 use serde_json::Value;
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
-    sync::Mutex,
-    time::Duration,
-};
+use std::{fs, path::Path, process::Command, sync::Mutex, time::Duration};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 
@@ -327,7 +321,7 @@ async fn sync_notifications(app: AppHandle, request_permission: bool) -> Result<
 pub fn run() {
     tauri::Builder::default()
         .plugin(
-            tauri::plugin::Builder::new("local-navigation")
+            tauri::plugin::Builder::<tauri::Wry, ()>::new("local-navigation")
                 .on_navigation(|_, url| {
                     url.scheme() == "tauri" && url.host_str() == Some("localhost")
                         || url.scheme() == "http" && url.host_str() == Some("tauri.localhost")

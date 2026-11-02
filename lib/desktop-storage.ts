@@ -24,7 +24,7 @@ export const desktopDaily=()=>serial(async()=>{
  const payload=await native<string>('ensure_daily_backup');const snapshot=parseBackup(JSON.parse(payload));return snapshot;
 });
 export const desktopList=()=>native<BackupInfo[]>('list_snapshots');
-export const desktopSnapshot=async(key:string)=>{const payload=await native<string>('read_snapshot',{key});const snapshot=parseBackup(JSON.parse(payload));return {...snapshot,date:JSON.parse(payload).createdAt.slice(0,10)};};
+export const desktopSnapshot=async(key:string)=>{const payload=await native<string>('read_snapshot',{key});const snapshot=parseBackup(JSON.parse(payload));return {...snapshot,date:localToday(new Date(JSON.parse(payload).createdAt))};};
 export const desktopRestore=(incoming:Snapshot)=>serial(async()=>{
  // Validate before native code creates the mandatory recovery point and commits atomically.
  const snapshot=parseBackup(JSON.parse(await serializeSnapshot(incoming))),doc=await read();
